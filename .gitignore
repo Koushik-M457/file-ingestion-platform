@@ -1,0 +1,23 @@
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Node
+node_modules/
+dist/
+
+# Environment variables and secrets
+.env
+.env.*
+
+# Local DuckDB database and uploaded data
+backend/storage/
+uploads/
+
+# Editor and OS
+.vscode/
+.DS_Store
+Thumbs.db
