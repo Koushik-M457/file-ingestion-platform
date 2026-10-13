@@ -1,160 +1,67 @@
 import { useEffect, useMemo, useState } from "react";
 
+import DashboardCanvas from "../components/Dashboard/DashboardCanvas";
+import ComponentSettings from "../components/Dashboard/ComponentSettings";
+import VizContent from "../components/Dashboard/VizContent";
+
 import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  LineChart,
-  Line,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  LabelList,
-} from "recharts";
+  API,
+  COMPONENT_TYPES,
+  autoTitle,
+  findFreeSpot,
+  makeDefaultConfig,
+  typeInfo,
+  uid,
+} from "../components/Dashboard/dashboardConfig";
 
 import "./Visualization.css";
 
 
-const API_BASE = "http://127.0.0.1:8000";
-const API = `${API_BASE}/api/data-model`;
+const STORAGE_KEY = "vizDashboard.v1";
 
 
-// chart colors (one hue: the default for a single series)
-const SERIES = "#2a78d6";
-const GRID = "#e5e7eb";
-const AXIS_TEXT = "#52514e";
-const SURFACE = "#ffffff";
-
-
-const CHART_TYPES = [
-  { id: "bar", label: "Bar" },
-  { id: "hbar", label: "Horizontal" },
-  { id: "line", label: "Line" },
-  { id: "area", label: "Area" },
-];
-
-const AGGREGATIONS = [
-  { id: "COUNT", label: "Count of rows" },
-  { id: "SUM", label: "Sum" },
-  { id: "AVG", label: "Average" },
-  { id: "MIN", label: "Minimum" },
-  { id: "MAX", label: "Maximum" },
-  { id: "COUNT_DISTINCT", label: "Count distinct" },
-];
-
-const SORTS = [
-  { id: "VALUE_DESC", label: "Highest value first" },
-  { id: "VALUE_ASC", label: "Lowest value first" },
-  { id: "LABEL_ASC", label: "Label A → Z" },
-];
-
-const LIMITS = [5, 10, 20, 50, 100];
-
-
-const compactFormat = new Intl.NumberFormat("en", {
-  notation: "compact",
-  maximumFractionDigits: 2,
-});
-
-const fullFormat = new Intl.NumberFormat("en", {
-  maximumFractionDigits: 2,
-});
-
-
-function compact(value) {
-  return compactFormat.format(value);
-}
-
-function full(value) {
-  return fullFormat.format(value);
-}
-
-function shorten(text, max) {
-
-  const value = String(text ?? "");
-
-  return value.length > max
-    ? value.slice(0, max - 1) + "…"
-    : value;
-
-}
-
-function isNumericType(type) {
-  return /INT|DOUBLE|DECIMAL|FLOAT|REAL|NUMERIC/i.test(type || "");
+function newSheet(name) {
+  return { id: uid(), name, items: [] };
 }
 
 
-// "2024-01-10 00:00:00" -> "2024-01-10"
-function cleanLabel(label) {
-  return String(label ?? "").replace(/ 00:00:00(\.0+)?$/, "");
-}
+// the dashboard (sheets + components) is kept in this browser
+function loadDashboard() {
 
+  try {
 
-// names that usually hold an amount or a quantity
-const MEASURE_NAME = /(AMT|AMOUNT|VALUE|WRBTR|DMBTR|NETWR|NETPR|PRICE|COST|TOTAL|NET|GROSS|MENGE|QTY|QUANT|SUM|REVENUE|SALES)/i;
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
 
+    if (saved && Array.isArray(saved.sheets) && saved.sheets.length > 0) {
 
-// Choose a measure that makes sense as a default:
-//   1. a column named like an amount / quantity
-//   2. the last numeric column (keys usually come first)
-//   3. any other column
-function pickMeasure(columns, exclude) {
+      return {
+        sheets: saved.sheets,
+        activeId: saved.sheets.some((s) => s.id === saved.activeId)
+          ? saved.activeId
+          : saved.sheets[0].id,
+      };
 
-  const candidates = columns.filter((c) => c.name !== exclude);
+    }
 
-  const byName = candidates.find((c) => MEASURE_NAME.test(c.name));
-
-  if (byName) return byName.name;
-
-  const numeric = candidates.filter((c) => isNumericType(c.type));
-
-  if (numeric.length > 0) return numeric[numeric.length - 1].name;
-
-  return (candidates[0] || columns[0])?.name || "";
-
-}
-
-
-// ---------------------------------------------------------
-// Tooltip
-// ---------------------------------------------------------
-
-function VizTooltip({ active, payload, measureLabel }) {
-
-  if (!active || !payload || payload.length === 0) {
-    return null;
+  } catch {
+    // ignore a broken or unavailable storage
   }
 
-  const point = payload[0].payload;
+  const sheet = newSheet("Sheet 1");
 
-  return (
-    <div className="viz-tooltip">
-
-      <div className="viz-tooltip-label">{point.label}</div>
-
-      <div className="viz-tooltip-row">
-        <span className="viz-tooltip-key" />
-        <span>{measureLabel}</span>
-        <strong>{full(point.value)}</strong>
-      </div>
-
-    </div>
-  );
+  return { sheets: [sheet], activeId: sheet.id };
 
 }
 
-
-// ---------------------------------------------------------
-// Page
-// ---------------------------------------------------------
 
 export default function Visualization({
   uploadedTables = [],
   derivedTables = [],
 }) {
+
+  // -----------------------------------------
+  // DATA MODEL
+  // -----------------------------------------
 
   const [allTables, setAllTables] = useState([]);
   const [allRelationships, setAllRelationships] = useState([]);
@@ -162,27 +69,6 @@ export default function Visualization({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const [config, setConfig] = useState({
-    table: "",
-    xTable: "",
-    xColumn: "",
-    yColumn: "",
-    aggregation: "COUNT",
-    chartType: "bar",
-    sort: "VALUE_DESC",
-    limit: 20,
-  });
-
-  const [result, setResult] = useState(null);
-  const [running, setRunning] = useState(false);
-  const [runError, setRunError] = useState("");
-
-  const [view, setView] = useState("chart");
-
-
-  // -----------------------------------------
-  // LOAD THE DATA MODEL
-  // -----------------------------------------
 
   useEffect(() => {
 
@@ -249,11 +135,7 @@ export default function Visualization({
   }, [uploadedTables.join(",")]);
 
 
-  // -----------------------------------------
-  // WHICH TABLES BELONG TO THIS DATA MODEL
-  // (same rule as the Data Model page)
-  // -----------------------------------------
-
+  // only the tables that belong to this data model
   const tables = useMemo(() => {
 
     const existing = new Set(allTables.map((t) => t.name));
@@ -297,439 +179,183 @@ export default function Visualization({
   }, [allRelationships, tables]);
 
 
-  const baseTable = tables.find((t) => t.name === config.table);
-
-  const baseColumns = baseTable?.columns || [];
-
-
-  // base table + tables linked to it by an approved relationship
-  const groupSources = useMemo(() => {
-
-    if (!baseTable) return [];
-
-    const sources = [{ table: baseTable, related: false }];
-
-    const seen = new Set([baseTable.name]);
-
-    relationships.forEach((r) => {
-
-      let otherName = null;
-
-      if (r.source_table === baseTable.name) otherName = r.target_table;
-      if (r.target_table === baseTable.name) otherName = r.source_table;
-
-      if (otherName && !seen.has(otherName)) {
-
-        const other = tables.find((t) => t.name === otherName);
-
-        if (other) {
-          seen.add(otherName);
-          sources.push({ table: other, related: true });
-        }
-
-      }
-
-    });
-
-    return sources;
-
-  }, [baseTable, relationships, tables]);
-
-
   // -----------------------------------------
-  // CONFIG HANDLERS
+  // DASHBOARD: sheets + components
   // -----------------------------------------
 
-  function update(changes) {
-    setConfig((previous) => ({ ...previous, ...changes }));
-  }
+  const [dash, setDash] = useState(loadDashboard);
 
+  const [selectedId, setSelectedId] = useState(null);
 
-  // pick the first table once the model has loaded
-  useEffect(() => {
+  const [panelTab, setPanelTab] = useState("components");
 
-    if (tables.length === 0) return;
+  const [search, setSearch] = useState("");
 
-    if (!tables.some((t) => t.name === config.table)) {
+  const [dragType, setDragType] = useState(null);
 
-      changeTable(tables[0].name);
+  const [renamingId, setRenamingId] = useState(null);
 
-    }
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tables]);
-
-
-  function changeTable(name) {
-
-    const table = tables.find((t) => t.name === name);
-
-    setResult(null);
-
-    update({
-      table: name,
-      xTable: "",
-      xColumn: table?.columns?.[0]?.name || "",
-      yColumn: "",
-      aggregation: "COUNT",
-    });
-
-  }
-
-
-  function changeGroupBy(encoded) {
-
-    const [tableName, ...rest] = encoded.split("::");
-
-    update({
-      xTable: tableName === config.table ? "" : tableName,
-      xColumn: rest.join("::"),
-    });
-
-  }
-
-
-  function changeAggregation(aggregation) {
-
-    const changes = { aggregation };
-
-    // pick a sensible measure the first time one is needed
-    if (aggregation !== "COUNT" && !config.yColumn) {
-
-      changes.yColumn = pickMeasure(
-        baseColumns,
-        config.xTable ? "" : config.xColumn
-      );
-
-    }
-
-    update(changes);
-
-  }
-
-
-  function changeChartType(chartType) {
-
-    update({
-      chartType,
-      sort:
-        chartType === "line" || chartType === "area"
-          ? "LABEL_ASC"
-          : "VALUE_DESC",
-    });
-
-  }
-
-
-  // -----------------------------------------
-  // RUN THE QUERY WHENEVER A CHOICE CHANGES
-  // -----------------------------------------
 
   useEffect(() => {
 
-    if (!config.table || !config.xColumn) return;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(dash));
+    } catch {
+      // storage unavailable - the dashboard just won't survive a refresh
+    }
 
-    if (config.aggregation !== "COUNT" && !config.yColumn) return;
+  }, [dash]);
 
-    const controller = new AbortController();
 
-    const timer = setTimeout(async () => {
+  const sheet = dash.sheets.find((s) => s.id === dash.activeId) || dash.sheets[0];
 
-      setRunning(true);
-      setRunError("");
+  const items = sheet.items;
 
-      try {
+  const selected = items.find((i) => i.id === selectedId) || null;
 
-        const response = await fetch(`${API}/chart-query`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: controller.signal,
-          body: JSON.stringify({
-            table: config.table,
-            x_table: config.xTable || null,
-            x_column: config.xColumn,
-            y_column:
-              config.aggregation === "COUNT"
-                ? null
-                : config.yColumn,
-            aggregation: config.aggregation,
-            sort: config.sort,
-            limit: config.limit,
-          }),
-        });
 
-        const data = await response.json();
+  function updateSheet(change) {
 
-        if (!response.ok) {
-          throw new Error(data.detail || "Could not build the chart.");
-        }
+    setDash((previous) => ({
+      ...previous,
+      sheets: previous.sheets.map((s) =>
+        s.id === previous.activeId ? { ...s, ...change(s) } : s
+      ),
+    }));
 
-        setResult({
-          ...data,
-          rows: (data.rows || []).map((row) => ({
-            ...row,
-            label: cleanLabel(row.label),
-          })),
-        });
+  }
 
-      } catch (err) {
+  function setItems(nextItems) {
+    updateSheet(() => ({ items: nextItems }));
+  }
 
-        if (err.name !== "AbortError") {
 
-          setResult(null);
-          setRunError(err.message);
+  // ---------- components ----------
 
-        }
+  function addComponent(type, spot) {
 
-      } finally {
+    const info = typeInfo(type);
 
-        if (!controller.signal.aborted) {
-          setRunning(false);
-        }
+    const position =
+      spot || findFreeSpot(items, info.w, info.h);
 
-      }
-
-    }, 250);
-
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
+    const item = {
+      id: uid(),
+      type,
+      col: position.col,
+      row: position.row,
+      w: info.w,
+      h: info.h,
+      config: makeDefaultConfig(type, tables),
     };
 
-  }, [
-    config.table,
-    config.xTable,
-    config.xColumn,
-    config.yColumn,
-    config.aggregation,
-    config.sort,
-    config.limit,
-  ]);
+    setItems([...items, item]);
 
+    selectItem(item.id);
 
-  // -----------------------------------------
-  // DERIVED VALUES FOR THE UI
-  // -----------------------------------------
+  }
 
-  const rows = result?.rows || [];
+  function updateConfig(id, patch) {
 
-  const aggregationLabel =
-    AGGREGATIONS.find((a) => a.id === config.aggregation)?.label || "";
-
-  const groupLabel = config.xTable
-    ? `${config.xTable}.${config.xColumn}`
-    : config.xColumn;
-
-  const measureLabel =
-    config.aggregation === "COUNT"
-      ? "Rows"
-      : `${aggregationLabel} of ${config.yColumn}`;
-
-  const title = `${measureLabel} by ${groupLabel}`;
-
-  const total = rows.reduce((sum, row) => sum + row.value, 0);
-
-  const totalMakesSense =
-    config.aggregation === "SUM" || config.aggregation === "COUNT";
-
-  const top = rows.reduce(
-    (best, row) => (best === null || row.value > best.value ? row : best),
-    null
-  );
-
-  const numericColumns = baseColumns.filter((c) => isNumericType(c.type));
-  const otherColumns = baseColumns.filter((c) => !isNumericType(c.type));
-
-
-  // -----------------------------------------
-  // CHART
-  // -----------------------------------------
-
-  function renderChart() {
-
-    const showLabels = rows.length <= 12;
-
-    const wholeNumbers = rows.every((row) => Number.isInteger(row.value));
-
-    const axisTick = { fill: AXIS_TEXT, fontSize: 12 };
-
-    const tooltip = (
-      <Tooltip
-        content={<VizTooltip measureLabel={measureLabel} />}
-        cursor={{ fill: "rgba(42, 120, 214, 0.06)" }}
-      />
+    setItems(
+      items.map((i) =>
+        i.id === id ? { ...i, config: { ...i.config, ...patch } } : i
+      )
     );
 
-    if (config.chartType === "hbar") {
+  }
 
-      const height = Math.max(320, rows.length * 32 + 60);
+  function deleteItem(id) {
 
-      return (
-        <ResponsiveContainer width="100%" height={height}>
-          <BarChart
-            data={rows}
-            layout="vertical"
-            margin={{ top: 8, right: 56, left: 8, bottom: 8 }}
-          >
-            <CartesianGrid horizontal={false} stroke={GRID} />
-            <XAxis
-              type="number"
-              allowDecimals={!wholeNumbers}
-              tick={axisTick}
-              tickLine={false}
-              axisLine={false}
-              tickFormatter={compact}
-            />
-            <YAxis
-              type="category"
-              dataKey="label"
-              width={150}
-              tick={axisTick}
-              tickLine={false}
-              axisLine={{ stroke: GRID }}
-              interval={0}
-              tickFormatter={(value) => shorten(value, 22)}
-            />
-            {tooltip}
-            <Bar
-              dataKey="value"
-              fill={SERIES}
-              maxBarSize={24}
-              radius={[0, 4, 4, 0]}
-              isAnimationActive={false}
-            >
-              {showLabels && (
-                <LabelList
-                  dataKey="value"
-                  position="right"
-                  formatter={compact}
-                  fill={AXIS_TEXT}
-                  fontSize={12}
-                />
-              )}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      );
+    setItems(items.filter((i) => i.id !== id));
 
+    if (selectedId === id) {
+      setSelectedId(null);
+      setPanelTab("components");
     }
 
-    const commonMargin = { top: 20, right: 16, left: 4, bottom: 4 };
+  }
 
-    const xAxis = (
-      <XAxis
-        dataKey="label"
-        tick={axisTick}
-        tickLine={false}
-        axisLine={{ stroke: GRID }}
-        interval={rows.length <= 24 ? 0 : "preserveStartEnd"}
-        angle={-35}
-        textAnchor="end"
-        height={80}
-        tickFormatter={(value) => shorten(value, 14)}
-      />
-    );
+  function duplicateItem(id) {
 
-    const yAxis = (
-      <YAxis
-        allowDecimals={!wholeNumbers}
-        tick={axisTick}
-        tickLine={false}
-        axisLine={false}
-        width={56}
-        tickFormatter={compact}
-      />
-    );
+    const original = items.find((i) => i.id === id);
 
-    const grid = <CartesianGrid vertical={false} stroke={GRID} />;
+    if (!original) return;
 
-    const dot =
-      rows.length <= 40
-        ? {
-            r: 4,
-            fill: SERIES,
-            stroke: SURFACE,
-            strokeWidth: 2,
-          }
-        : false;
+    const spot = findFreeSpot(items, original.w, original.h, original.col, original.row);
 
-    const activeDot = {
-      r: 6,
-      fill: SERIES,
-      stroke: SURFACE,
-      strokeWidth: 2,
+    const copy = {
+      ...original,
+      id: uid(),
+      col: spot.col,
+      row: spot.row,
+      config: { ...original.config },
     };
 
-    if (config.chartType === "line") {
+    setItems([...items, copy]);
 
-      return (
-        <ResponsiveContainer width="100%" height={420}>
-          <LineChart data={rows} margin={commonMargin}>
-            {grid}{xAxis}{yAxis}{tooltip}
-            <Line
-              type="monotone"
-              dataKey="value"
-              stroke={SERIES}
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              dot={dot}
-              activeDot={activeDot}
-              isAnimationActive={false}
-            />
-          </LineChart>
-        </ResponsiveContainer>
-      );
+    selectItem(copy.id);
 
-    }
+  }
 
-    if (config.chartType === "area") {
+  function selectItem(id) {
 
-      return (
-        <ResponsiveContainer width="100%" height={420}>
-          <AreaChart data={rows} margin={commonMargin}>
-            {grid}{xAxis}{yAxis}{tooltip}
-            <Area
-              type="monotone"
-              dataKey="value"
-              stroke={SERIES}
-              strokeWidth={2}
-              fill={SERIES}
-              fillOpacity={0.1}
-              dot={dot}
-              activeDot={activeDot}
-              isAnimationActive={false}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
-      );
+    setSelectedId(id);
 
-    }
+    if (id) setPanelTab("settings");
 
-    return (
-      <ResponsiveContainer width="100%" height={420}>
-        <BarChart data={rows} margin={commonMargin}>
-          {grid}{xAxis}{yAxis}{tooltip}
-          <Bar
-            dataKey="value"
-            fill={SERIES}
-            maxBarSize={24}
-            radius={[4, 4, 0, 0]}
-            isAnimationActive={false}
-          >
-            {showLabels && (
-              <LabelList
-                dataKey="value"
-                position="top"
-                formatter={compact}
-                fill={AXIS_TEXT}
-                fontSize={12}
-              />
-            )}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-    );
+  }
+
+
+  // ---------- sheets (tabs) ----------
+
+  function addSheet() {
+
+    const created = newSheet(`Sheet ${dash.sheets.length + 1}`);
+
+    setDash({
+      sheets: [...dash.sheets, created],
+      activeId: created.id,
+    });
+
+    setSelectedId(null);
+    setPanelTab("components");
+
+  }
+
+  function openSheet(id) {
+
+    setDash({ ...dash, activeId: id });
+    setSelectedId(null);
+    setPanelTab("components");
+
+  }
+
+  function renameSheet(id, name) {
+
+    setDash({
+      ...dash,
+      sheets: dash.sheets.map((s) =>
+        s.id === id ? { ...s, name: name.trim() || s.name } : s
+      ),
+    });
+
+  }
+
+  function deleteSheet(id) {
+
+    if (dash.sheets.length === 1) return;
+
+    if (!window.confirm("Delete this sheet and all its components?")) return;
+
+    const remaining = dash.sheets.filter((s) => s.id !== id);
+
+    setDash({
+      sheets: remaining,
+      activeId: dash.activeId === id ? remaining[0].id : dash.activeId,
+    });
+
+    setSelectedId(null);
 
   }
 
@@ -742,302 +368,245 @@ export default function Visualization({
 
     return (
       <section className="viz-page">
-        <div className="viz-header">
-          <div>
-            <h1>Visualization</h1>
-            <p>Loading the data model...</p>
-          </div>
-        </div>
+        <div className="viz-empty-page">Loading the data model...</div>
       </section>
     );
 
   }
-
 
   if (uploadedTables.length === 0 || tables.length === 0) {
 
     return (
       <section className="viz-page">
-
-        <div className="viz-header">
-          <div>
-            <h1>Visualization</h1>
-            <p>
-              {error ||
-                "Upload a file first. Charts are built from the data model."}
-            </p>
-          </div>
+        <div className="viz-empty-page">
+          {error ||
+            "Upload a file first. Components are built from the data model."}
         </div>
-
       </section>
     );
 
   }
+
+
+  const visibleTypes = COMPONENT_TYPES.filter((t) =>
+    t.label.toLowerCase().includes(search.trim().toLowerCase())
+  );
+
+  const groups = [...new Set(visibleTypes.map((t) => t.group))];
 
 
   return (
 
     <section className="viz-page">
 
-      <div className="viz-header">
+      {/* ---------------- sheet tabs ---------------- */}
 
-        <div>
-          <h1>Visualization</h1>
-          <p>Chart the tables in your data model.</p>
-        </div>
+      <div className="dash-tabs">
 
-        <div className="viz-stats">
+        <button
+          type="button"
+          className="dash-tab-add"
+          title="Add sheet"
+          aria-label="Add sheet"
+          onClick={addSheet}
+        >
+          +
+        </button>
 
-          <div className="viz-stat">
-            <strong>{rows.length}</strong>
-            <span>Groups shown</span>
+        {dash.sheets.map((s) => (
+
+          <div
+            key={s.id}
+            className={s.id === sheet.id ? "dash-tab active" : "dash-tab"}
+            onClick={() => openSheet(s.id)}
+            onDoubleClick={() => setRenamingId(s.id)}
+          >
+
+            {renamingId === s.id ? (
+
+              <input
+                autoFocus
+                defaultValue={s.name}
+                onClick={(e) => e.stopPropagation()}
+                onBlur={(e) => {
+                  renameSheet(s.id, e.target.value);
+                  setRenamingId(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.target.blur();
+                  if (e.key === "Escape") setRenamingId(null);
+                }}
+              />
+
+            ) : (
+
+              <span title="Double-click to rename">{s.name}</span>
+
+            )}
+
+            {s.id === sheet.id && dash.sheets.length > 1 && (
+              <button
+                type="button"
+                className="dash-tab-close"
+                title="Delete sheet"
+                aria-label="Delete sheet"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteSheet(s.id);
+                }}
+              >
+                ×
+              </button>
+            )}
+
           </div>
 
-          <div className="viz-stat">
-            <strong>{totalMakesSense ? compact(total) : "—"}</strong>
-            <span>Total</span>
-          </div>
-
-          <div className="viz-stat">
-            <strong title={top?.label}>
-              {top ? shorten(top.label, 12) : "—"}
-            </strong>
-            <span>Highest group</span>
-          </div>
-
-        </div>
+        ))}
 
       </div>
 
 
-      <div className="viz-body">
+      <div className="dash-body">
 
-        {/* ---------------- controls ---------------- */}
+        {/* ---------------- canvas ---------------- */}
 
-        <aside className="viz-sidebar">
+        <DashboardCanvas
+          items={items}
+          selectedId={selectedId}
+          dragType={dragType}
+          getTitle={(item) =>
+            item.config.title || autoTitle(item.type, item.config)
+          }
+          renderBody={(item) => (
+            <VizContent type={item.type} config={item.config} />
+          )}
+          onSelect={selectItem}
+          onItemsChange={setItems}
+          onDropType={(type, spot) => {
+            setDragType(null);
+            addComponent(type, spot);
+          }}
+          onDelete={deleteItem}
+          onDuplicate={duplicateItem}
+        />
 
-          <label className="viz-label">Table</label>
 
-          <select
-            value={config.table}
-            onChange={(e) => changeTable(e.target.value)}
-          >
-            {tables.map((t) => (
-              <option key={t.name} value={t.name}>{t.name}</option>
-            ))}
-          </select>
+        {/* ---------------- right panel ---------------- */}
+
+        <aside className="dash-panel">
+
+          <div className="dash-panel-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={panelTab === "components"}
+              className={panelTab === "components" ? "active" : ""}
+              onClick={() => setPanelTab("components")}
+            >
+              Components
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={panelTab === "settings"}
+              className={panelTab === "settings" ? "active" : ""}
+              onClick={() => setPanelTab("settings")}
+            >
+              Settings
+            </button>
+          </div>
 
 
-          <label className="viz-label">Group by (X axis)</label>
+          {panelTab === "components" && (
+            <div className="dash-panel-body">
 
-          <select
-            value={`${config.xTable || config.table}::${config.xColumn}`}
-            onChange={(e) => changeGroupBy(e.target.value)}
-          >
-            {groupSources.map((source) => (
-              <optgroup
-                key={source.table.name}
-                label={
-                  source.related
-                    ? `${source.table.name} (related)`
-                    : source.table.name
-                }
-              >
-                {source.table.columns.map((c) => (
-                  <option
-                    key={c.name}
-                    value={`${source.table.name}::${c.name}`}
-                  >
-                    {c.name}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+              <input
+                type="search"
+                className="dash-search"
+                placeholder="Search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
 
-          {groupSources.length === 1 && (
-            <div className="viz-hint">
-              Connect this table to others in the Data Model to group
-              by their columns too.
+              {groups.map((group) => (
+
+                <div key={group}>
+
+                  <div className="dash-group-title">{group}</div>
+
+                  <div className="dash-palette">
+
+                    {visibleTypes
+                      .filter((t) => t.group === group)
+                      .map((t) => (
+
+                        <div
+                          key={t.type}
+                          className="dash-palette-item"
+                          role="button"
+                          tabIndex={0}
+                          draggable
+                          title="Drag onto the canvas, or click to add"
+                          data-type={t.type}
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData(
+                              "application/x-viz-component",
+                              t.type
+                            );
+                            e.dataTransfer.effectAllowed = "copy";
+                            setDragType(t.type);
+                          }}
+                          onDragEnd={() => setDragType(null)}
+                          onClick={() => addComponent(t.type)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") addComponent(t.type);
+                          }}
+                        >
+                          {t.icon}
+                          <span>{t.label}</span>
+                        </div>
+
+                      ))}
+
+                  </div>
+
+                </div>
+
+              ))}
+
+              {visibleTypes.length === 0 && (
+                <div className="viz-hint">No component matches “{search}”.</div>
+              )}
+
             </div>
           )}
 
 
-          <label className="viz-label">Calculate</label>
+          {panelTab === "settings" && (
+            <div className="dash-panel-body">
 
-          <select
-            value={config.aggregation}
-            onChange={(e) => changeAggregation(e.target.value)}
-          >
-            {AGGREGATIONS.map((a) => (
-              <option key={a.id} value={a.id}>{a.label}</option>
-            ))}
-          </select>
+              {selected ? (
 
+                <ComponentSettings
+                  item={selected}
+                  tables={tables}
+                  relationships={relationships}
+                  onChange={(patch) => updateConfig(selected.id, patch)}
+                  onDelete={() => deleteItem(selected.id)}
+                />
 
-          {config.aggregation !== "COUNT" && (
+              ) : (
 
-            <>
-              <label className="viz-label">Measure (Y axis)</label>
+                <div className="viz-hint">
+                  Select a component on the canvas to change its settings.
+                </div>
 
-              <select
-                value={config.yColumn}
-                onChange={(e) => update({ yColumn: e.target.value })}
-              >
-                {numericColumns.length > 0 && (
-                  <optgroup label="Numeric columns">
-                    {numericColumns.map((c) => (
-                      <option key={c.name} value={c.name}>{c.name}</option>
-                    ))}
-                  </optgroup>
-                )}
-                {otherColumns.length > 0 && (
-                  <optgroup label="Other columns (read as numbers)">
-                    {otherColumns.map((c) => (
-                      <option key={c.name} value={c.name}>{c.name}</option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-            </>
+              )}
 
+            </div>
           )}
-
-
-          <label className="viz-label">Chart type</label>
-
-          <div className="viz-segmented" role="group" aria-label="Chart type">
-            {CHART_TYPES.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                className={config.chartType === t.id ? "active" : ""}
-                onClick={() => changeChartType(t.id)}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-
-          <label className="viz-label">Sort</label>
-
-          <select
-            value={config.sort}
-            onChange={(e) => update({ sort: e.target.value })}
-          >
-            {SORTS.map((s) => (
-              <option key={s.id} value={s.id}>{s.label}</option>
-            ))}
-          </select>
-
-
-          <label className="viz-label">Show up to</label>
-
-          <select
-            value={config.limit}
-            onChange={(e) => update({ limit: Number(e.target.value) })}
-          >
-            {LIMITS.map((n) => (
-              <option key={n} value={n}>{n} groups</option>
-            ))}
-          </select>
 
         </aside>
-
-
-        {/* ---------------- chart ---------------- */}
-
-        <div className="viz-main">
-
-          <div className="viz-card">
-
-            <div className="viz-card-head">
-
-              <div>
-                <h2>{title}</h2>
-                <p>
-                  {config.table}
-                  {result?.truncated
-                    ? ` · ${config.sort === "LABEL_ASC" ? "first" : "top"} ${config.limit} groups shown, more exist`
-                    : ""}
-                </p>
-              </div>
-
-              <div className="viz-segmented small" role="group" aria-label="View">
-                <button
-                  type="button"
-                  className={view === "chart" ? "active" : ""}
-                  onClick={() => setView("chart")}
-                >
-                  Chart
-                </button>
-                <button
-                  type="button"
-                  className={view === "table" ? "active" : ""}
-                  onClick={() => setView("table")}
-                >
-                  Table
-                </button>
-              </div>
-
-            </div>
-
-
-            {runError && <div className="viz-notice error">{runError}</div>}
-
-            {result?.warning && (
-              <div className="viz-notice warning">{result.warning}</div>
-            )}
-
-            {running && rows.length === 0 && !runError && (
-              <div className="viz-empty">Building chart...</div>
-            )}
-
-            {!running && !runError && rows.length === 0 && result && (
-              <div className="viz-empty">
-                No data to chart for this selection.
-              </div>
-            )}
-
-            {rows.length > 0 && view === "chart" && (
-              <div className={running ? "viz-chart busy" : "viz-chart"}>
-                {renderChart()}
-              </div>
-            )}
-
-            {rows.length > 0 && view === "table" && (
-              <div className="viz-table-wrap">
-                <table className="viz-table">
-                  <thead>
-                    <tr>
-                      <th>{groupLabel}</th>
-                      <th className="num">{measureLabel}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row) => (
-                      <tr key={row.label}>
-                        <td>{row.label}</td>
-                        <td className="num">{full(row.value)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-
-            {result?.sql && (
-              <details className="viz-sql">
-                <summary>View SQL</summary>
-                <pre>{result.sql}</pre>
-              </details>
-            )}
-
-          </div>
-
-        </div>
 
       </div>
 

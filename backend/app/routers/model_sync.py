@@ -1,3 +1,6 @@
+import math
+from datetime import date, datetime, time
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -129,14 +132,16 @@ def sync_uploaded_tables(request: SyncTablesRequest):
 
 
 # ============================================================
-# CHART QUERY  (powers the Visualization page)
-#
-# Aggregates data from the model tables:
+# CHART QUERY  (powers the Visualization dashboard)
 #
 #   SELECT <group-by column>, <AGG>(<measure column>)
 #   FROM model.<table>
 #   [JOIN model.<related table> via an APPROVED relationship]
 #   GROUP BY 1  ORDER BY ...  LIMIT n
+#
+# - no x_column      -> one number (KPI card)
+# - SUM / COUNT      -> also returns the grand total of ALL groups, so
+#                       a pie chart can show "Other"
 #
 # Every table / column name is looked up in information_schema
 # and quoted, and the aggregation comes from a fixed list, so
@@ -153,12 +158,18 @@ ALLOWED_SORTS = {"VALUE_DESC", "VALUE_ASC", "LABEL_ASC"}
 
 class ChartQueryRequest(BaseModel):
     table: str                         # table the measure comes from
-    x_column: str                      # column to group by
+    x_column: Optional[str] = None     # column to group by (none = KPI)
     x_table: Optional[str] = None      # related table the x column lives in
     y_column: Optional[str] = None     # measure (not needed for COUNT)
     aggregation: str = "COUNT"
     sort: str = "VALUE_DESC"
     limit: int = 20
+
+
+class TableRowsRequest(BaseModel):
+    table: str
+    columns: list[str] = []
+    limit: int = 25
 
 
 def _quote(name: str) -> str:
@@ -211,6 +222,29 @@ def _resolve_column(connection, table: str, column: str) -> str:
     return row[0]
 
 
+def _json_value(value):
+    """Make a DuckDB value safe to send as JSON."""
+
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+
+    if isinstance(value, Decimal):
+        return float(value)
+
+    if isinstance(value, datetime):
+        if value.time() == time(0, 0):
+            return value.date().isoformat()
+        return value.isoformat(sep=" ")
+
+    if isinstance(value, date):
+        return value.isoformat()
+
+    return str(value)
+
+
 @router.post("/chart-query")
 def chart_query(request: ChartQueryRequest):
 
@@ -240,6 +274,8 @@ def chart_query(request: ChartQueryRequest):
             status_code=400,
             detail="Choose a measure column for this aggregation.",
         )
+
+    grouped = bool(request.x_column)
 
     limit = max(1, min(int(request.limit), 500))
 
@@ -272,12 +308,14 @@ def chart_query(request: ChartQueryRequest):
 
             join_sql = ""
             warning = None
+            x_column = None
+            x_expr = None
 
             # ------------------------------------------------
             # Group-by column: base table, or a related table
             # ------------------------------------------------
 
-            if request.x_table and request.x_table.lower() != base.lower():
+            if grouped and request.x_table and request.x_table.lower() != base.lower():
 
                 x_table = _resolve_table(connection, request.x_table)
                 x_column = _resolve_column(connection, x_table, request.x_column)
@@ -353,7 +391,7 @@ def chart_query(request: ChartQueryRequest):
                         f"{x_table} row. Sums and counts can be inflated."
                     )
 
-            else:
+            elif grouped:
 
                 x_column = _resolve_column(connection, base, request.x_column)
 
@@ -383,6 +421,49 @@ def chart_query(request: ChartQueryRequest):
                 value_expr = (
                     f"{aggregation}(TRY_CAST(b.{_quote(y_column)} AS DOUBLE))"
                 )
+
+            # ------------------------------------------------
+            # KPI: one number, no grouping
+            # ------------------------------------------------
+
+            if not grouped:
+
+                sql = f"""
+                    SELECT 'Total' AS label, {value_expr} AS value
+                    FROM model.{_quote(base)} AS b
+                """
+
+                row = connection.execute(sql).fetchone()
+
+                rows = []
+
+                if row and row[1] is not None:
+
+                    rows = [{"label": row[0], "value": float(row[1])}]
+
+                else:
+
+                    warning = (
+                        f"No numeric values found in {y_column}."
+                        if y_column else "No data."
+                    )
+
+                return {
+                    "status": "success",
+                    "table": base,
+                    "x_column": None,
+                    "y_column": y_column,
+                    "aggregation": aggregation,
+                    "rows": rows,
+                    "total": rows[0]["value"] if rows else None,
+                    "truncated": False,
+                    "warning": warning,
+                    "sql": " ".join(sql.split()),
+                }
+
+            # ------------------------------------------------
+            # Grouped query
+            # ------------------------------------------------
 
             order_sql = {
                 "VALUE_DESC": "value DESC NULLS LAST, label",
@@ -414,6 +495,23 @@ def chart_query(request: ChartQueryRequest):
                 for row in result[:limit]
             ]
 
+            # grand total of ALL groups (lets a pie chart show "Other")
+            total = None
+
+            if aggregation in {"SUM", "COUNT"}:
+
+                total_row = connection.execute(
+                    f"""
+                    SELECT {value_expr}
+                    FROM model.{_quote(base)} AS b
+                    {join_sql}
+                    """
+                ).fetchone()
+
+                if total_row and total_row[0] is not None:
+
+                    total = float(total_row[0])
+
             if not rows and aggregation not in {"COUNT", "COUNT_DISTINCT"}:
 
                 warning = (
@@ -428,9 +526,88 @@ def chart_query(request: ChartQueryRequest):
                 "y_column": y_column,
                 "aggregation": aggregation,
                 "rows": rows,
+                "total": total,
                 "truncated": truncated,
                 "warning": warning,
                 "sql": " ".join(sql.split()),
+            }
+
+    except HTTPException:
+        raise
+
+    except Exception as error:
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        )
+
+
+# ============================================================
+# TABLE ROWS  (powers the Table component)
+# ============================================================
+
+
+@router.post("/table-rows")
+def table_rows(request: TableRowsRequest):
+
+    limit = max(1, min(int(request.limit), 200))
+
+    connection = get_connection()
+
+    try:
+
+        with get_database_lock():
+
+            table = _resolve_table(connection, request.table)
+
+            all_columns = connection.execute(
+                """
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'model'
+                  AND table_name = ?
+                ORDER BY ordinal_position
+                """,
+                [table],
+            ).fetchall()
+
+            types = {name: data_type for name, data_type in all_columns}
+
+            if request.columns:
+
+                chosen = [
+                    _resolve_column(connection, table, column)
+                    for column in request.columns[:40]
+                ]
+
+            else:
+
+                chosen = [name for name, _ in all_columns[:12]]
+
+            select_list = ", ".join(_quote(name) for name in chosen)
+
+            rows = connection.execute(
+                f"SELECT {select_list} FROM model.{_quote(table)} LIMIT {limit}"
+            ).fetchall()
+
+            row_count = connection.execute(
+                f"SELECT COUNT(*) FROM model.{_quote(table)}"
+            ).fetchone()[0]
+
+            return {
+                "status": "success",
+                "table": table,
+                "columns": [
+                    {"name": name, "type": types.get(name, "")}
+                    for name in chosen
+                ],
+                "rows": [
+                    [_json_value(value) for value in row]
+                    for row in rows
+                ],
+                "row_count": row_count,
+                "truncated": row_count > limit,
             }
 
     except HTTPException:
