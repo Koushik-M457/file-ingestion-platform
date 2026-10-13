@@ -15,7 +15,8 @@
     "@uiw/react-codemirror": "^4.25.11",
     "@xyflow/react": "^12.12.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Upload from "./pages/Upload";
 import Transform from "./pages/Transform";
 import DataModel from "./pages/DataModel";
+import Visualization from "./pages/Visualization";
 
 import "./App.css";
 
@@ -11,6 +12,7 @@ const PAGES = [
   { id: "upload", label: "1. Upload & Mapping" },
   { id: "transform", label: "2. SQL Transformer" },
   { id: "data-model", label: "3. Data Model" },
+  { id: "visualization", label: "4. Visualization" },
 ];
 
 
@@ -102,7 +104,8 @@ function App() {
         {PAGES.map((item) => {
 
           const disabled =
-            item.id === "data-model" && modelLocked;
+            (item.id === "data-model" || item.id === "visualization") &&
+            modelLocked;
 
           return (
             <button
@@ -151,9 +154,16 @@ function App() {
         />
       </div>
 
-      {/* Data Model mounts fresh each visit so it always loads the latest tables */}
+      {/* Data Model and Visualization mount fresh each visit so they always load the latest tables */}
       {page === "data-model" && (
         <DataModel
+          uploadedTables={tables}
+          derivedTables={derivedTables}
+        />
+      )}
+
+      {page === "visualization" && (
+        <Visualization
           uploadedTables={tables}
           derivedTables={derivedTables}
         />
