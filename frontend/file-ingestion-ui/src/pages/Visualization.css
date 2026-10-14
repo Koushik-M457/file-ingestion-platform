@@ -36,6 +36,12 @@
   background: #ffffff;
   border-bottom: 1px solid #e5e7eb;
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.dash-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .dash-tab-add {
@@ -81,19 +87,88 @@
   font-size: 14px;
 }
 
-.dash-tab-close {
-  padding: 0 2px;
+.dash-tab-more {
+  width: 22px;
+  height: 22px;
+  padding: 0;
 
   font-size: 16px;
+  line-height: 1;
   color: #6b7280;
+
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.dash-tab:hover .dash-tab-more,
+.dash-tab.active .dash-tab-more,
+.dash-tab-more.open {
+  visibility: visible;
+}
+
+.dash-tab-more:hover,
+.dash-tab-more.open {
+  color: #111827;
+  background: #e5e7eb;
+}
+
+
+/* ---------- sheet menu ---------- */
+
+.dash-menu {
+  position: fixed;
+  z-index: 1000;
+
+  min-width: 190px;
+  padding: 6px 0;
+
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+
+.dash-menu button {
+  width: 100%;
+  padding: 9px 16px;
+
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  font-size: 14px;
+  color: #111827;
+  text-align: left;
 
   background: none;
   border: 0;
   cursor: pointer;
 }
 
-.dash-tab-close:hover {
+.dash-menu button:hover:not(:disabled) {
+  background: #f3f4f6;
+}
+
+.dash-menu button:disabled {
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+.dash-menu button.danger:not(:disabled) {
   color: #b91c1c;
+}
+
+.dash-menu-icon {
+  width: 18px;
+  text-align: center;
+}
+
+.dash-menu-sep {
+  margin: 6px 0;
+  border-top: 1px solid #e5e7eb;
 }
 
 

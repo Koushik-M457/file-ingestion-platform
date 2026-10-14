@@ -12,7 +12,7 @@ import {
   makeDefaultConfig,
   typeInfo,
   uid,
-} from "../components/Dashboard/dashboardConfig";
+} from "../components/Dashboard/Dashboardconfig";
 
 import "./Visualization.css";
 
@@ -195,6 +195,9 @@ export default function Visualization({
 
   const [renamingId, setRenamingId] = useState(null);
 
+  // the ⋮ menu of a sheet tab: { id, x, y } (screen position) or null
+  const [tabMenu, setTabMenu] = useState(null);
+
 
   useEffect(() => {
 
@@ -309,9 +312,29 @@ export default function Visualization({
 
   // ---------- sheets (tabs) ----------
 
+  useEffect(() => {
+
+    if (!tabMenu) return undefined;
+
+    const close = () => setTabMenu(null);
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+
+    window.addEventListener("click", close);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKey);
+
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", onKey);
+    };
+
+  }, [tabMenu]);
+
+
   function addSheet() {
 
-    const created = newSheet(`Sheet ${dash.sheets.length + 1}`);
+    const created = newSheet(uniqueSheetName("Sheet", dash.sheets));
 
     setDash({
       sheets: [...dash.sheets, created],
@@ -331,14 +354,101 @@ export default function Visualization({
 
   }
 
+  // "Sheet 2" -> "Sheet 2 (2)" when the name is already used by another sheet
+  function uniqueSheetName(base, sheets) {
+
+    const taken = new Set(sheets.map((s) => s.name.toLowerCase()));
+
+    if (base !== "Sheet" && !taken.has(base.toLowerCase())) return base;
+
+    let n = base === "Sheet" ? sheets.length + 1 : 2;
+
+    let candidate = base === "Sheet" ? `Sheet ${n}` : `${base} (${n})`;
+
+    while (taken.has(candidate.toLowerCase())) {
+
+      n += 1;
+      candidate = base === "Sheet" ? `Sheet ${n}` : `${base} (${n})`;
+
+    }
+
+    return candidate;
+
+  }
+
   function renameSheet(id, name) {
+
+    const clean = name.trim();
 
     setDash({
       ...dash,
-      sheets: dash.sheets.map((s) =>
-        s.id === id ? { ...s, name: name.trim() || s.name } : s
-      ),
+      sheets: dash.sheets.map((s) => {
+
+        if (s.id !== id) return s;
+
+        if (!clean || clean === s.name) return s;
+
+        const others = dash.sheets.filter((o) => o.id !== id);
+
+        return { ...s, name: uniqueSheetName(clean, others) };
+
+      }),
     });
+
+  }
+
+  function duplicateSheet(id) {
+
+    const source = dash.sheets.find((s) => s.id === id);
+
+    if (!source) return;
+
+    const copy = {
+      ...source,
+      id: uid(),
+      name: uniqueSheetName(`${source.name} copy`, dash.sheets),
+      items: source.items.map((item) => ({
+        ...item,
+        id: uid(),
+        config: { ...item.config, columns: [...(item.config.columns || [])] },
+      })),
+    };
+
+    const index = dash.sheets.findIndex((s) => s.id === id);
+
+    const sheets = [...dash.sheets];
+    sheets.splice(index + 1, 0, copy);
+
+    setDash({ sheets, activeId: copy.id });
+    setSelectedId(null);
+
+  }
+
+  function moveSheet(id, step) {
+
+    const index = dash.sheets.findIndex((s) => s.id === id);
+    const target = index + step;
+
+    if (index < 0 || target < 0 || target >= dash.sheets.length) return;
+
+    const sheets = [...dash.sheets];
+    [sheets[index], sheets[target]] = [sheets[target], sheets[index]];
+
+    setDash({ ...dash, sheets });
+
+  }
+
+  function openTabMenu(event, id) {
+
+    event.stopPropagation();
+
+    const box = event.currentTarget.getBoundingClientRect();
+
+    setTabMenu(
+      tabMenu && tabMenu.id === id
+        ? null
+        : { id, x: box.left, y: box.bottom + 4 }
+    );
 
   }
 
@@ -420,6 +530,11 @@ export default function Visualization({
             className={s.id === sheet.id ? "dash-tab active" : "dash-tab"}
             onClick={() => openSheet(s.id)}
             onDoubleClick={() => setRenamingId(s.id)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              openSheet(s.id);
+              setRenamingId(s.id);
+            }}
           >
 
             {renamingId === s.id ? (
@@ -427,6 +542,8 @@ export default function Visualization({
               <input
                 autoFocus
                 defaultValue={s.name}
+                onFocus={(e) => e.target.select()}
+                onDoubleClick={(e) => e.stopPropagation()}
                 onClick={(e) => e.stopPropagation()}
                 onBlur={(e) => {
                   renameSheet(s.id, e.target.value);
@@ -440,22 +557,23 @@ export default function Visualization({
 
             ) : (
 
-              <span title="Double-click to rename">{s.name}</span>
+              <span title="Double-click or press ✎ to rename">{s.name}</span>
 
             )}
 
-            {s.id === sheet.id && dash.sheets.length > 1 && (
+            {renamingId !== s.id && (
               <button
                 type="button"
-                className="dash-tab-close"
-                title="Delete sheet"
-                aria-label="Delete sheet"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  deleteSheet(s.id);
-                }}
+                className={
+                  tabMenu && tabMenu.id === s.id
+                    ? "dash-tab-more open"
+                    : "dash-tab-more"
+                }
+                title="Sheet options"
+                aria-label="Sheet options"
+                onClick={(e) => openTabMenu(e, s.id)}
               >
-                ×
+                ⋮
               </button>
             )}
 
@@ -465,6 +583,45 @@ export default function Visualization({
 
       </div>
 
+
+
+      {tabMenu && (() => {
+
+        const index = dash.sheets.findIndex((s) => s.id === tabMenu.id);
+        const only = dash.sheets.length === 1;
+
+        const run = (fn) => (e) => {
+          e.stopPropagation();
+          setTabMenu(null);
+          fn();
+        };
+
+        return (
+          <div
+            className="dash-menu"
+            style={{ left: tabMenu.x, top: tabMenu.y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button type="button" onClick={run(() => { openSheet(tabMenu.id); setRenamingId(tabMenu.id); })}>
+              <span className="dash-menu-icon">✎</span> Rename
+            </button>
+            <button type="button" onClick={run(() => duplicateSheet(tabMenu.id))}>
+              <span className="dash-menu-icon">⧉</span> Duplicate
+            </button>
+            <button type="button" disabled={index <= 0} onClick={run(() => moveSheet(tabMenu.id, -1))}>
+              <span className="dash-menu-icon">←</span> Move to left
+            </button>
+            <button type="button" disabled={index >= dash.sheets.length - 1} onClick={run(() => moveSheet(tabMenu.id, 1))}>
+              <span className="dash-menu-icon">→</span> Move to right
+            </button>
+            <div className="dash-menu-sep" />
+            <button type="button" className="danger" disabled={only} onClick={run(() => deleteSheet(tabMenu.id))}>
+              <span className="dash-menu-icon">🗑</span> Delete
+            </button>
+          </div>
+        );
+
+      })()}
 
       <div className="dash-body">
 

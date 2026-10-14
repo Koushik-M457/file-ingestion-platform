@@ -222,6 +222,22 @@ def _resolve_column(connection, table: str, column: str) -> str:
     return row[0]
 
 
+def _column_type(connection, table: str, column: str) -> str:
+
+    row = connection.execute(
+        """
+        SELECT data_type
+        FROM information_schema.columns
+        WHERE table_schema = 'model'
+          AND table_name = ?
+          AND column_name = ?
+        """,
+        [table, column],
+    ).fetchone()
+
+    return row[0] if row else ""
+
+
 def _json_value(value):
     """Make a DuckDB value safe to send as JSON."""
 
@@ -364,12 +380,28 @@ def chart_query(request: ChartQueryRequest):
                     rel_target_col if base_is_source else rel_source_col,
                 )
 
-                # keys may have different types (BIGINT vs VARCHAR)
-                join_sql = (
-                    f"JOIN model.{_quote(x_table)} AS x "
-                    f"ON CAST(b.{_quote(base_key)} AS VARCHAR) "
-                    f"= CAST(x.{_quote(other_key)} AS VARCHAR)"
-                )
+                # Keys with the SAME type join directly (fast, can use
+                # DuckDB's native hash join on the real type).
+                # Keys with different types (BIGINT vs VARCHAR) are
+                # compared as text.
+                if (
+                    _column_type(connection, base, base_key)
+                    == _column_type(connection, x_table, other_key)
+                ):
+
+                    join_sql = (
+                        f"JOIN model.{_quote(x_table)} AS x "
+                        f"ON b.{_quote(base_key)} "
+                        f"= x.{_quote(other_key)}"
+                    )
+
+                else:
+
+                    join_sql = (
+                        f"JOIN model.{_quote(x_table)} AS x "
+                        f"ON CAST(b.{_quote(base_key)} AS VARCHAR) "
+                        f"= CAST(x.{_quote(other_key)} AS VARCHAR)"
+                    )
 
                 x_expr = f"x.{_quote(x_column)}"
 

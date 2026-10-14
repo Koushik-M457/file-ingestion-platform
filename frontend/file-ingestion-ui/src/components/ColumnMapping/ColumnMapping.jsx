@@ -7,10 +7,7 @@ export default function ColumnMapping({
     onMappingComplete,
 }) {
 
-    // =========================================================
     // STATE
-    // =========================================================
-
     const [tableMappings, setTableMappings] = useState({});
 
     const [expandedTables, setExpandedTables] = useState({});
@@ -19,10 +16,7 @@ export default function ColumnMapping({
 
     const [status, setStatus] = useState("");
 
-
-    // =========================================================
     // INITIALIZE TABLE MAPPINGS
-    // =========================================================
 
     useEffect(() => {
 
@@ -57,9 +51,8 @@ export default function ColumnMapping({
             }
 
 
-            // -------------------------------------------------
+            
             // Get columns
-            // -------------------------------------------------
 
             const columns =
                 Array.isArray(table?.column_metadata)
@@ -68,10 +61,7 @@ export default function ColumnMapping({
                         ? table.column_names
                         : [];
 
-
-            // -------------------------------------------------
             // Create mapping for every column
-            // -------------------------------------------------
 
             initialMappings[tableName] =
                 columns
@@ -87,10 +77,7 @@ export default function ColumnMapping({
                             return null;
                         }
 
-
-                        // -------------------------------------
                         // Original datatype
-                        // -------------------------------------
 
                         const sourceType =
                             typeof column === "string"
@@ -105,11 +92,8 @@ export default function ColumnMapping({
                             ).toUpperCase();
 
 
-                        // -------------------------------------
                         // Default target datatype
-                        //
                         // VARCHAR is shown as STRING.
-                        // -------------------------------------
 
                         const targetType =
                             normalizedSourceType === "VARCHAR"
@@ -143,10 +127,7 @@ export default function ColumnMapping({
                     .filter(Boolean);
 
 
-            // -------------------------------------------------
             // Expand every uploaded table
-            // -------------------------------------------------
-
             initialExpanded[tableName] = true;
 
         });
@@ -164,9 +145,7 @@ export default function ColumnMapping({
     }, [tables]);
 
 
-    // =========================================================
     // GET TABLE NAME
-    // =========================================================
 
     function getTableName(table) {
 
@@ -179,11 +158,7 @@ export default function ColumnMapping({
 
     }
 
-
-    // =========================================================
     // UPDATE A SINGLE MAPPING
-    // =========================================================
-
     function updateMapping(
         tableName,
         index,
@@ -220,38 +195,25 @@ export default function ColumnMapping({
     }
 
 
-    // =========================================================
     // CONVERT ALL TO STRING
-    // =========================================================
-    //
     // This is the important function.
-    //
     // Clicking:
-    //
     //     Convert All to String
-    //
     // will:
-    //
     // 1. Change every target datatype to STRING.
     // 2. Select every column.
     // 3. Send the mapping directly to FastAPI.
     // 4. FastAPI converts STRING -> VARCHAR.
     // 5. Backend creates model.<original_table_name>.
     // 6. Preview is updated immediately.
-    //
     // User does NOT need to click Apply Mapping afterward.
-    // =========================================================
 
     async function convertAllToString(tableName) {
 
         const currentMappings =
             tableMappings[tableName] || [];
 
-
-        // -----------------------------------------------------
         // Check columns
-        // -----------------------------------------------------
-
         if (
             currentMappings.length === 0
         ) {
@@ -262,12 +224,7 @@ export default function ColumnMapping({
 
             return;
         }
-
-
-        // -----------------------------------------------------
         // Convert every column to STRING
-        // -----------------------------------------------------
-
         const stringMappings =
             currentMappings.map(
                 (mapping) => ({
@@ -283,11 +240,7 @@ export default function ColumnMapping({
                 })
             );
 
-
-        // -----------------------------------------------------
         // Update UI immediately
-        // -----------------------------------------------------
-
         setTableMappings(
             (current) => ({
 
@@ -311,10 +264,7 @@ export default function ColumnMapping({
 
 
         try {
-
-            // =================================================
             // BUILD API REQUEST
-            // =================================================
 
             const payload = {
 
@@ -360,10 +310,7 @@ export default function ColumnMapping({
             );
 
 
-            // =================================================
             // CALL BACKEND
-            // =================================================
-
             const response =
                 await fetch(
                     "http://127.0.0.1:8000/api/column-mapping",
@@ -385,10 +332,7 @@ export default function ColumnMapping({
                     }
                 );
 
-
-            // -------------------------------------------------
             // Read response
-            // -------------------------------------------------
 
             const result =
                 await response.json();
@@ -407,11 +351,7 @@ export default function ColumnMapping({
             console.log(
                 "========================================"
             );
-
-
-            // =================================================
             // HANDLE BACKEND ERROR
-            // =================================================
 
             if (!response.ok) {
 
@@ -422,13 +362,8 @@ export default function ColumnMapping({
 
             }
 
-
-            // =================================================
             // SEND RESULT TO INGEST.JSX
-            // =================================================
-            //
             // Backend response:
-            //
             // {
             //     status: "success",
             //     table: "model.bkpf",
@@ -437,9 +372,7 @@ export default function ColumnMapping({
             //     columns: [...],
             //     preview: [...]
             // }
-            //
             // Ingest.jsx uses this to update DataPreview.
-            // =================================================
 
             if (
                 typeof onMappingComplete ===
@@ -452,11 +385,7 @@ export default function ColumnMapping({
 
             }
 
-
-            // =================================================
             // SUCCESS MESSAGE
-            // =================================================
-
             setStatus(
                 `${tableName}: all columns converted to STRING.`
             );
@@ -484,19 +413,12 @@ export default function ColumnMapping({
 
     }
 
-
-    // =========================================================
-    // APPLY MANUAL MAPPING
-    // =========================================================
-    //
+    // APPLY MANUAL MAPPING    
     // Used when the user wants:
-    //
     // BUKRS -> STRING
     // BELNR -> BIGINT
     // BUDAT -> DATE
-    //
     // instead of converting everything to STRING.
-    // =========================================================
 
     async function handleApplyMapping(
         tableName
@@ -512,10 +434,7 @@ export default function ColumnMapping({
                     mapping.include
             );
 
-
-        // -----------------------------------------------------
         // Validate
-        // -----------------------------------------------------
 
         if (
             activeMappings.length === 0
