@@ -1,6 +1,6 @@
 import re
 
-from app.database import get_connection
+from app.database import get_connection, drop_object, bump_data_version
 from app.security.sql_validator import validate_sql
 
 
@@ -191,6 +191,7 @@ def execute_transform(
     # EXECUTE CREATE TABLE
     # ========================================================
 
+    drop_object(connection, "model", output_table, views_only=True)
     connection.execute(
         create_sql
     )

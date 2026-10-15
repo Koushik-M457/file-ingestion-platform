@@ -1,3 +1,4 @@
+import traceback
 from pathlib import Path
 
 from fastapi import (
@@ -29,8 +30,10 @@ ALLOWED_EXTENSIONS = {
 }
 
 
+# NOTE: plain "def" (not "async def") so FastAPI runs this in a worker
+# thread. The blocking file / DuckDB work no longer freezes the server.
 @router.post("/upload")
-async def upload_files(
+def upload_files(
     files: list[UploadFile] = File(...)
 ):
 
@@ -92,7 +95,7 @@ async def upload_files(
 
 
             # -------------------------------------
-            # Save ORIGINAL file
+            # Save ORIGINAL file (read-only, locked)
             # -------------------------------------
 
             saved = save_original_file(
@@ -101,7 +104,7 @@ async def upload_files(
 
 
             # -------------------------------------
-            # Create RAW + WORKING tables
+            # Create RAW (locked) + WORKING tables
             # -------------------------------------
 
             metadata = create_raw_table(
@@ -182,10 +185,10 @@ async def upload_files(
 
     except Exception as error:
 
+        # prints the exact file + line in the uvicorn terminal
+        traceback.print_exc()
+
         raise HTTPException(
-
             status_code=500,
-
             detail=str(error)
-
         )

@@ -1,8 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.database import get_connection
-
+from app.database import get_connection, drop_object, bump_data_version
 
 router = APIRouter(
     prefix="/api",
@@ -265,9 +264,12 @@ def apply_column_mapping(
     # EXECUTE
     # ========================================================
 
+    drop_object(connection, "model", output_table, views_only=True)
     connection.execute(
         create_sql
     )
+
+    bump_data_version()
 
 
     # ========================================================

@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from app.database import (
     get_connection,
     get_database_lock,
+    get_write_lock,
 )
 
 
@@ -13,7 +14,7 @@ router = APIRouter(
 )
 
 
-VALID_CARDINALITIES = {"1:1", "1:N", "N:1", "N:N"}
+VALID_CARDINALITIES = {"1:1", "1:N"}
 
 
 # ============================================================
@@ -227,7 +228,7 @@ def get_model_tables():
 
     try:
 
-        with get_database_lock():
+        with get_write_lock():
 
             tables_result = connection.execute(
                 """
@@ -301,7 +302,6 @@ def get_model_tables():
 # 7.2 COLUMN DISCOVERY
 # ============================================================
 
-
 @router.get("/tables/{table_name}/columns")
 def get_table_columns(table_name: str):
 
@@ -361,57 +361,62 @@ def get_table_columns(table_name: str):
                 f'SELECT COUNT(*) FROM model."{source_table}"'
             ).fetchone()[0]
 
-            columns = []
+            # ONE scan: null count + distinct count for ALL columns
+            parts = []
 
             for column in columns_result:
 
-                ordinal_position = column[0]
-                column_name = column[1]
-                data_type = column[2]
-                is_nullable = column[3] == "YES"
+                quoted = column[1].replace('"', '""')
 
-                # Column names come from information_schema but are
-                # still interpolated into SQL, so double quotes inside
-                # a name are escaped.
-                quoted = column_name.replace('"', '""')
+                parts.append(f'COUNT(*) - COUNT("{quoted}")')
+                parts.append(f'COUNT(DISTINCT "{quoted}")')
 
-                null_count = connection.execute(
-                    f'''
-                    SELECT COUNT(*)
-                    FROM model."{source_table}"
-                    WHERE "{quoted}" IS NULL
-                    '''
-                ).fetchone()[0]
+            stats = (
+                connection.execute(
+                    f'SELECT {", ".join(parts)} '
+                    f'FROM model."{source_table}"'
+                ).fetchone()
+                if parts
+                else ()
+            )
 
-                distinct_count = connection.execute(
-                    f'''
-                    SELECT COUNT(DISTINCT "{quoted}")
-                    FROM model."{source_table}"
-                    '''
-                ).fetchone()[0]
+            # ONE read: sample values for ALL columns
+            sample_rows = connection.execute(
+                f'SELECT * FROM model."{source_table}" LIMIT 2000'
+            ).fetchall()
 
-                sample_result = connection.execute(
-                    f'''
-                    SELECT DISTINCT "{quoted}"
-                    FROM model."{source_table}"
-                    WHERE "{quoted}" IS NOT NULL
-                    LIMIT 5
-                    '''
-                ).fetchall()
+            columns = []
+
+            for index, column in enumerate(columns_result):
+
+                samples = []
+
+                for sample_row in sample_rows:
+
+                    value = sample_row[index]
+
+                    if value is None:
+                        continue
+
+                    text = str(value)
+
+                    if text not in samples:
+
+                        samples.append(text)
+
+                        if len(samples) == 5:
+                            break
 
                 columns.append(
                     {
-                        "position": ordinal_position,
-                        "name": column_name,
-                        "type": data_type,
-                        "nullable": is_nullable,
+                        "position": column[0],
+                        "name": column[1],
+                        "type": column[2],
+                        "nullable": column[3] == "YES",
                         "row_count": row_count,
-                        "null_count": null_count,
-                        "distinct_count": distinct_count,
-                        "sample_values": [
-                            str(value[0])
-                            for value in sample_result
-                        ],
+                        "null_count": stats[index * 2],
+                        "distinct_count": stats[index * 2 + 1],
+                        "sample_values": samples,
                     }
                 )
 

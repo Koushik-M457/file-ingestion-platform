@@ -1,6 +1,11 @@
 import { useRef, useState } from "react";
 import "./FileUpload.css";
 
+// Largest file accepted by the browser check, in GB.
+// 0 = no limit (any size is accepted). Change this one number.
+const MAX_FILE_SIZE_GB = 0;
+const MAX_FILE_SIZE = MAX_FILE_SIZE_GB * 1024 * 1024 * 1024;
+
 function FileUpload({
   onUploadComplete
 }) {
@@ -42,15 +47,10 @@ function FileUpload({
     }
 
 
-    // 200 MB limit
-
-    const maxSize =
-      200 * 1024 * 1024;
-
-    if (selectedFile.size > maxSize) {
+    if (MAX_FILE_SIZE_GB > 0 && selectedFile.size > MAX_FILE_SIZE) {
 
       setError(
-        "File size must be less than 200 MB."
+        `File size must be less than ${MAX_FILE_SIZE_GB} GB.`
       );
 
       return false;
@@ -434,7 +434,7 @@ function FileUpload({
 
             <div className="upload-subtitle">
 
-              .csv .xlsx .xls up to 200 MB each
+              .csv .xlsx .xls{MAX_FILE_SIZE_GB > 0 ? ` up to ${MAX_FILE_SIZE_GB} GB each` : ""}
 
             </div>
 
