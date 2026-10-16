@@ -14,13 +14,9 @@ router = APIRouter(
 )
 
 
-VALID_CARDINALITIES = {"1:1", "1:N"}
+VALID_CARDINALITIES = {"1:1", "N:1"}
 
-
-# ============================================================
 # REQUEST MODELS
-# ============================================================
-
 
 class RelationshipValidationRequest(BaseModel):
     source_table: str
@@ -32,10 +28,7 @@ class RelationshipValidationRequest(BaseModel):
     action: str
 
 
-# ============================================================
 # HELPERS
-# ============================================================
-
 
 def normalize_column_name(name: str) -> str:
     """
@@ -185,10 +178,7 @@ def relationship_to_dict(row) -> dict:
         "created_at": str(row[8]),
     }
 
-
-# ============================================================
 # RELATIONSHIP STORAGE
-# ============================================================
 
 
 def initialize_relationship_table():
@@ -215,10 +205,7 @@ def initialize_relationship_table():
         """
     )
 
-
-# ============================================================
 # 7.1 TABLE DISCOVERY
-# ============================================================
 
 
 @router.get("/tables")
@@ -298,9 +285,7 @@ def get_model_tables():
         )
 
 
-# ============================================================
 # 7.2 COLUMN DISCOVERY
-# ============================================================
 
 @router.get("/tables/{table_name}/columns")
 def get_table_columns(table_name: str):
@@ -440,10 +425,7 @@ def get_table_columns(table_name: str):
         )
 
 
-# ============================================================
 # 7.3 RELATIONSHIP DISCOVERY
-# ============================================================
-
 
 @router.get("/relationships/discover")
 def discover_relationships():
@@ -581,36 +563,38 @@ def discover_relationships():
                             unique_b = is_unique(stats_b)
 
                             # --------------------------------
-                            # Orient: "one" side = source
+                            # Orient relationship: source -> target
+                            # Only 1:1 and N:1 are allowed.
+                            # For N:1, source is the many side and
+                            # target is the unique (one) side.
                             # --------------------------------
 
-                            if unique_b and not unique_a:
+                            source = (table_a, name_a, type_a, stats_a)
+                            target = (table_b, name_b, type_b, stats_b)
 
-                                # swap so the unique column is the source
-                                source = (table_b, name_b, type_b, stats_b)
-                                target = (table_a, name_a, type_a, stats_a)
+                            if unique_a and unique_b:
+                                cardinality = "1:1"
+
+                            elif unique_a and not unique_b:
+                                # A is the one side and B is the many side.
+                                # Reverse direction so the source is the many side.
+                                source, target = target, source
+                                cardinality = "N:1"
+
+                            elif not unique_a and unique_b:
+                                # A is the many side and B is the one side.
+                                cardinality = "N:1"
 
                             else:
-
-                                source = (table_a, name_a, type_a, stats_a)
-                                target = (table_b, name_b, type_b, stats_b)
+                                # Neither side is unique: this is N:N.
+                                # Do not recommend it.
+                                continue
 
                             source_table, source_column, source_type, source_stats = source
                             target_table, target_column, target_type, target_stats = target
 
-                            source_unique = is_unique(source_stats)
-                            target_unique = is_unique(target_stats)
+                            # Match percentage 
 
-                            if source_unique and target_unique:
-                                cardinality = "1:1"
-                            elif source_unique:
-                                cardinality = "1:N"
-                            else:
-                                cardinality = "N:N"
-
-                            # --------------------------------
-                            # Match percentage
-                            # --------------------------------
 
                             matching_values = count_matching_values(
                                 connection,
@@ -620,10 +604,12 @@ def discover_relationships():
                                 target_column,
                             )
 
-                            if cardinality == "1:N":
-                                # share of the "many" side that has a parent
-                                denominator = target_stats["distinct"]
+                            if cardinality == "N:1":
+                                # Source is the many side: measure the share
+                                # of its distinct non-null keys found in target.
+                                denominator = source_stats["distinct"]
                             else:
+                                # For 1:1, use the smaller distinct-key set.
                                 denominator = min(
                                     source_stats["distinct"],
                                     target_stats["distinct"],
@@ -638,9 +624,7 @@ def discover_relationships():
                             if match_percentage < 50:
                                 continue
 
-                            # --------------------------------
                             # Confidence
-                            # --------------------------------
 
                             if (
                                 match_percentage >= 95
@@ -699,10 +683,8 @@ def discover_relationships():
         )
 
 
-# ============================================================
 # 7.4 RELATIONSHIP VALIDATION
 # 7.5 SAVE RELATIONSHIPS
-# ============================================================
 
 
 @router.post("/relationships/validate")
@@ -766,9 +748,7 @@ def validate_relationship(
                     detail=str(error),
                 )
 
-            # ------------------------------------------------
             # Tables must exist
-            # ------------------------------------------------
 
             for label, table, original in (
                 ("Source", source_table, request.source_table),
@@ -792,9 +772,7 @@ def validate_relationship(
                         detail=f"{label} table '{original}' does not exist.",
                     )
 
-            # ------------------------------------------------
             # Columns must exist (and return their real names)
-            # ------------------------------------------------
 
             def resolve_column(label, table, column):
 
@@ -945,9 +923,7 @@ def validate_relationship(
         )
 
 
-# ============================================================
 # 7.5 GET SAVED RELATIONSHIPS
-# ============================================================
 
 
 @router.get("/relationships")
@@ -1003,11 +979,8 @@ def get_relationships():
         )
 
 
-# ============================================================
 # 7.6 GET APPROVED RELATIONSHIPS ONLY
-#
 # Used by the Visual Data Model
-# ============================================================
 
 
 @router.get("/relationships/approved")
@@ -1058,9 +1031,7 @@ def get_approved_relationships():
         )
 
 
-# ============================================================
 # DELETE A SAVED RELATIONSHIP
-# ============================================================
 
 
 @router.delete("/relationships/{relationship_id}")
